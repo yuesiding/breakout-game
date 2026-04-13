@@ -1,144 +1,115 @@
-// #ifndef BREAKOUT_GAME_H
-// #define BREAKOUT_GAME_H
-
-// #include <raylib.h>
-// #include <vector>
-// #include <string>
-
-// class Brick {
-// private:
-//     Rectangle rect;
-//     bool active;
-//     Color color;
-//     int points;
-
-// public:
-//     Brick(float x, float y, float width, float height, Color c, int p);
-//     int CheckHit(const Vector2& ballPos, float ballRadius);
-//     void Draw() const;
-//     bool IsActive() const;
-// };
-
-// class BreakoutGame {
-// private:
-//     const int screenWidth = 800;
-//     const int screenHeight = 450;
-
-//     Rectangle player;
-//     Vector2 ballPos;
-//     Vector2 ballSpeed;
-//     float ballRadius;
-//     bool gameStarted;
-
-//     std::vector<Brick> bricks;
-//     int score;
-//     int lives;
-//     bool gameOver;
-
-//     void InitBricks();
-//     void ResetBall();
-//     void ResetGame();
-//     void Update();
-//     void Draw();
-
-// public:
-//     BreakoutGame();
-//     void Run();
-// };
-
-// #endif
-
-#ifndef BREAKOUT_GAME_H
-#define BREAKOUT_GAME_H
+#ifndef BREAKOUTGAME_H
+#define BREAKOUTGAME_H
 
 #include <raylib.h>
 #include <vector>
-#include <string>
-// 新增：JSON库头文件（需安装nlohmann/json）
-#include <nlohmann/json.hpp>
-// 新增：文件流头文件
-#include <fstream>
-// 新增：标准输入输出
-#include <iostream>
+#include "powerup.hpp"
+#include "particle.hpp"
 
-// 命名空间别名（简化JSON代码）
-using json = nlohmann::json;
-
-// 新增：游戏状态枚举（替代bool瘟疫）
+// 新增：游戏状态枚举
 enum class GameState {
-    MENU,         // 主菜单
-    PLAYING,      // 游戏中
-    PAUSED,       // 暂停
-    GAMEOVER,     // 游戏结束（失败）
-    VICTORY,      // 胜利
-    LEADERBOARD   // 排行榜界面
+    START,      // 新增：起始界面
+    PLAYING,    // 游戏中
+    GAME_OVER,  // 游戏失败
+    WIN         // 游戏获胜
 };
 
+// 前置声明
+class Ball;
+class Paddle;
+class Brick;
+
+// 核心游戏类
+class BreakoutGame {
+private:
+    // 窗口参数
+    const int screenWidth = 800;
+    const int screenHeight = 600;
+    
+    // 游戏对象
+    Paddle* paddle;
+    std::vector<Ball*> balls;
+    std::vector<Brick*> bricks;
+    std::vector<Particle> particles;
+    std::vector<PowerUp> powerUps;
+    
+    // 游戏状态（新增GameState）
+    int score;
+    int life;
+    GameState gameState; // 替换原isGameOver
+    bool isBallPaused;
+
+    // 私有方法
+    void InitGame();          // 初始化游戏
+    void UpdateGame();        // 更新逻辑
+    void DrawGame();          // 绘制画面
+    void SpawnParticles(Vector2 pos, Color color); // 生成粒子
+    void SpawnPowerUp(Vector2 pos);                // 生成道具
+    void HandleCollisions();  // 处理碰撞
+    void Cleanup();           // 清理资源
+    bool CheckWin();          // 新增：判断是否获胜
+
+public:
+    BreakoutGame();           // 构造函数
+    ~BreakoutGame();          // 析构函数
+    void Run();               // 游戏主循环
+};
+
+// Ball 类（补充GetSpeed方法）
+class Ball {
+private:
+    Vector2 position;
+    Vector2 speed;
+    float radius;
+    float slowTimer;
+    float slowFactor;
+
+public:
+    Ball(float x, float y, float sx, float sy, float r);
+    void Update();
+    void Draw() const;
+    void BounceX();
+    void BounceY();
+    void Slow(float factor, float time);
+    Ball* Clone() const;
+    
+    Vector2 GetPosition() const { return position; }
+    float GetRadius() const { return radius; }
+    void SetPosition(Vector2 pos) { position = pos; }
+    void SetSpeed(Vector2 sp) { speed = sp; }
+    Vector2 GetSpeed() const { return speed; } // 新增：补充GetSpeed接口
+};
+
+// Paddle 类
+class Paddle {
+private:
+    float originalWidth;
+    float extendTimer;
+public: 
+    Rectangle rect;
+    Paddle(float x, float y, float w, float h);
+    void Update();
+    void Draw() const;
+    void Extend(float extra, float time);
+    
+    Rectangle GetRect() const { return rect; }
+};
+
+// Brick 类（修正构造函数声明）
 class Brick {
 private:
     Rectangle rect;
-    bool active;
-    Color color;
-    int points;
+    bool destroyed;
+    Color color; // 新增：砖块颜色
 
 public:
-    Brick(float x, float y, float width, float height, Color c, int p);
-    int CheckHit(const Vector2& ballPos, float ballRadius);
+    Brick(float x, float y, float w, float h, Color col); // 带颜色的构造函数
     void Draw() const;
-    bool IsActive() const;
-};
-
-class BreakoutGame {
-private:
-    // ------------ 替换原有的硬编码 + 新增配置变量 ------------
-    int screenWidth;
-    int screenHeight;
-    std::string windowTitle;
-    
-    float ballRadius;
-    float ballGravity;
-    float ballMaxSpeed;
-    float ballBounceForce;
-    
-    float paddleWidth;
-    float paddleHeight;
-    float paddleSpeed;
-    float paddleBoostSpeed;
-    
-    int bricksRows;
-    int bricksCols;
-    float brickWidth;
-    float brickHeight;
-    
-    int initialLives;
-    int scorePerBrick;
-    float timeMultiplierDecay;
-
-    // ------------ 原有的游戏变量 ------------
-    Rectangle player;
-    Vector2 ballPos;
-    Vector2 ballSpeed;
-    bool gameStarted;
-
-    std::vector<Brick> bricks;
-    int score;
-    int lives;
-    // ------------ 替换原有的 bool 状态 ------------
-    GameState currentState;  // 替代 gameOver、paused 等 bool
-
-    // ------------ 新增私有方法 ------------
-    void LoadConfig(const std::string& configPath);  // 加载JSON配置
-    void InitBricks();
-    void ResetBall();
-    void ResetGame();
-    void Update();
-    void Draw();
-    // 新增：检查砖块是否全清（用于胜利判断）
-    bool AllBricksCleared() const;
-
-public:
-    BreakoutGame();
-    void Run();
+    void Destroy() { destroyed = true; }
+    bool IsDestroyed() const { return destroyed; }
+    Rectangle GetRect() const { return rect; }
+    Vector2 GetPosition() const { return {rect.x + rect.width/2, rect.y + rect.height/2}; }
+    Color GetColor() const { return color; } // 新增：获取颜色
 };
 
 #endif
