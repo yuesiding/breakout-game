@@ -5,6 +5,41 @@
 #include <ctime>
 #include <iostream>
 
+#include <thread>     // 多线程
+#include <mutex>      // 线程安全（锁）
+#include <future>     // 异步加载
+#include <chrono>     // 时间
+
+// ===================== 多线程 第二步 =====================
+// 加载状态（对应PPT要求）
+enum class LoadState
+{
+    IDLE,     // 空闲：没在加载
+    LOADING,  // 正在异步加载资源
+    DONE      // 加载完成
+};
+
+// 全局变量：记录当前加载状态
+LoadState currentLoadState = LoadState::IDLE;
+// 新增：保存异步任务的future
+std::future<void> loadFuture;
+bool showLoadComplete = false;
+float completeTimer = 0.0f;
+
+// 线程安全锁（防止多线程冲突，PPT 必考点）
+std::mutex loadMutex;
+
+// 后台加载函数（在另一个线程运行，不卡游戏）
+void LoadResourcesAsync()
+{
+    // 模拟加载资源：等待2秒（比如加载图片、声音、地图）
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    // 线程安全地修改状态
+    std::lock_guard<std::mutex> lock(loadMutex);
+    currentLoadState = LoadState::DONE;
+}
+
 // 碰撞检测实现
 void BreakoutGame::HandleCollisions() {
     // 球-墙壁碰撞
@@ -232,6 +267,62 @@ BreakoutGame::~BreakoutGame() {
 
 // 更新游戏逻辑
 void BreakoutGame::UpdateGame() {
+
+// ==============================================
+// 第8课 多线程：按 L 键启动异步加载
+// ==============================================
+if (IsKeyPressed(KEY_L))
+{
+    // 只有空闲状态才能开始加载
+    std::lock_guard<std::mutex> lock(loadMutex);
+    if (currentLoadState == LoadState::IDLE)
+    {
+        // 切换为加载中状态
+        currentLoadState = LoadState::LOADING;
+
+        // 启动异步线程（后台加载，游戏不卡顿）
+        // 启动异步线程（后台加载，游戏不卡顿）
+        loadFuture = std::async(std::launch::async, LoadResourcesAsync);
+    }
+}
+
+// ==============================================
+// 第8课：检查异步加载是否完成
+// ==============================================
+{
+    std::lock_guard<std::mutex> lock(loadMutex);
+
+    // 如果正在加载，并且任务已经完成
+    if (currentLoadState == LoadState::LOADING)
+    {
+        if (loadFuture.valid() &&
+            loadFuture.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready)
+        {
+            // 切换成完成状态
+            currentLoadState = LoadState::DONE;
+        }
+    }
+
+    // ==============================================
+    // 加载完成后：做一个效果（背景变红）
+    // ==============================================
+    if (currentLoadState == LoadState::DONE)
+{
+    showLoadComplete = true;
+    completeTimer = 2.0f; // 显示2秒
+    currentLoadState = LoadState::IDLE;
+}
+
+// 计时器倒计时
+if (showLoadComplete)
+{
+    completeTimer -= GetFrameTime();
+    if (completeTimer <= 0)
+    {
+        showLoadComplete = false; // 时间到，消失
+    }
+}
+}
     // 起始界面
     if (gameState == GameStateEnum::START) {
         paddle1->Update();
@@ -303,6 +394,19 @@ void BreakoutGame::UpdateGame() {
 void BreakoutGame::DrawGame() {
     BeginDrawing();
     ClearBackground(BLACK);
+    // 在 DrawGame() 里加入这段代码，用来显示加载动画
+{
+    std::lock_guard<std::mutex> lock(loadMutex);
+    if (currentLoadState == LoadState::LOADING)
+    {
+        DrawText("LOADING...", 320, 270, 40, YELLOW);
+    }
+    // 加载完成提示
+    if (showLoadComplete)
+    {
+        DrawText("LOAD COMPLETE!", 240, 270, 40, GREEN);
+    }
+}
 
     // 绘制游戏元素
     paddle1->Draw();
