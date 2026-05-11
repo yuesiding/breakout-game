@@ -11,6 +11,61 @@
 #include <future>     // 异步加载
 #include <chrono>     // 时间
 
+// ====================== 第10课 性能优化：粒子对象池 ======================
+const int MAX_PARTICLES = 500;  // 池大小
+
+struct PooledParticle {
+    Vector2 position;
+    Vector2 velocity;
+    Color color;
+    float life;
+    bool inUse;
+};
+
+PooledParticle particlePool[MAX_PARTICLES];
+
+// 从对象池获取一个空闲粒子（不new、不delete）
+void SpawnParticleFromPool(Vector2 pos, Color color) {
+    for (int i = 0; i < MAX_PARTICLES; i++) {
+        if (!particlePool[i].inUse) {
+            particlePool[i].position = pos;
+            particlePool[i].velocity = {
+                (float)(rand() % 200 - 100),
+                (float)(rand() % 200 - 100)
+            };
+            particlePool[i].color = color;
+            particlePool[i].life = 0.5f;
+            particlePool[i].inUse = true;
+            break;
+        }
+    }
+}
+
+// 更新对象池里所有粒子
+void UpdateParticlePool() {
+    float dt = GetFrameTime();
+    for (int i = 0; i < MAX_PARTICLES; i++) {
+        if (particlePool[i].inUse) {
+            particlePool[i].position.x += particlePool[i].velocity.x * dt;
+            particlePool[i].position.y += particlePool[i].velocity.y * dt;
+            particlePool[i].life -= dt;
+
+            if (particlePool[i].life <= 0) {
+                particlePool[i].inUse = false;
+            }
+        }
+    }
+}
+
+// 绘制对象池里所有粒子
+void DrawParticlePool() {
+    for (int i = 0; i < MAX_PARTICLES; i++) {
+        if (particlePool[i].inUse) {
+            DrawCircleV(particlePool[i].position, 2, particlePool[i].color);
+        }
+    }
+}
+
 // ===================== 多线程 第二步 =====================
 // 加载状态（对应PPT要求）
 enum class LoadState
@@ -44,6 +99,9 @@ void LoadResourcesAsync()
 
 // 碰撞检测实现
 void BreakoutGame::HandleCollisions() {
+    // ====================== 【优化课：开始计时】 ======================
+    double startTime = GetTime();
+
     // 球-墙壁碰撞
     for (auto& ball : balls) {
         Vector2 p = ball->GetPosition();
@@ -77,14 +135,13 @@ void BreakoutGame::HandleCollisions() {
                 score += 10;
                 hit[i] = true;
 
-                // 粒子效果
-                for (int j = 0; j < 10; j++) {
-                    Vector2 vel = {(float)(rand() % 200 - 100), (float)(rand() % 200 - 100)};
-                    particles.emplace_back(
-                        Vector2{brick->GetRect().x + brick->GetRect().width/2, brick->GetRect().y + brick->GetRect().height/2},
-                        vel, brick->GetColor(), 0.5f
-                    );
-                }
+                // 【对象池优化】不再new粒子，从池里取
+for (int j = 0; j < 10; j++) {
+    SpawnParticleFromPool(
+        { brick->GetRect().x + brick->GetRect().width/2, brick->GetRect().y + brick->GetRect().height/2 },
+        brick->GetColor()
+    );
+}
 
                 // 生成道具
                 if (rand() % 100 < 30) {
@@ -140,14 +197,18 @@ void BreakoutGame::HandleCollisions() {
     // 清理失效道具/粒子
     powerUps.erase(std::remove_if(powerUps.begin(), powerUps.end(),
         [](const PowerUp& pu) { return !pu.IsActive(); }), powerUps.end());
-    particles.erase(std::remove_if(particles.begin(), particles.end(),
-        [](const Particle& p) { return p.IsDead(); }), particles.end());
+    // particles.erase(std::remove_if(particles.begin(), particles.end(),
+    //     [](const Particle& p) { return p.IsDead(); }), particles.end());
 
     // 更新游戏状态
     if (life <= 0) gameState = GameStateEnum::GAME_OVER;
     else if (std::all_of(bricks.begin(), bricks.end(), [](Brick* b){ return b->IsDestroyed(); })) {
         gameState = GameStateEnum::WIN;
     }
+
+    // ====================== 【优化课：结束计时 + 输出】 ======================
+    double elapsed = GetTime() - startTime;
+    TraceLog(LOG_INFO, "【碰撞检测耗时】：%.3f ms", elapsed * 1000);
 }
 
 // 发送游戏状态给客户端
@@ -364,10 +425,10 @@ if (showLoadComplete)
         for (auto& ball : balls) ball->Update();
     }
 
-    // 运行物理逻辑
     HandleCollisions();
-    for (auto& pu : powerUps) pu.Update();
-    for (auto& p : particles) p.Update();
+for (auto& pu : powerUps) pu.Update();
+// 【对象池】更新粒子
+UpdateParticlePool();
 
     // 同步状态给客户端（可选）
     SendGameState();
@@ -399,7 +460,8 @@ if (showLoadComplete)
     for (auto& ball : balls) ball->Draw();
     for (auto& brick : bricks) brick->Draw();
     for (auto& pu : powerUps) pu.Draw();
-    for (auto& p : particles) p.Draw();
+    // 【对象池】绘制粒子
+    DrawParticlePool();
 
     // 绘制UI
     DrawText(TextFormat("Score: %d", score), 10, 10, 20, WHITE);
@@ -417,6 +479,9 @@ if (showLoadComplete)
 
     if (clientPeer) DrawText("client has connected", 600, 570, 20, GREEN);
      else DrawText("waiting for client...", 600, 570, 20, RED);
+
+     // 性能数据（屏幕正上方居中）
+DrawText(TextFormat("FPS: %d | Frame time: %.2f ms", GetFPS(), GetFrameTime() * 1000), 280, 10, 20, YELLOW);
 
     EndDrawing();
 }
