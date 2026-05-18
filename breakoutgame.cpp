@@ -4,12 +4,119 @@
 #include <cstdlib>
 #include <ctime>
 #include <iostream>
+#include <fstream>
+#include "json.hpp"
+using json = nlohmann::json;
+// 关卡配置结构体
+struct LevelCfg
+{
+    int level_id;
+    int rows;
+    int cols;
+    float ball_speed;
+    float paddle_speed;
+    std::vector<std::vector<int>> layout;
+};
+// 存储所有关卡配置
+std::vector<LevelCfg> allLevels;
+bool hasSaveFile = false;
 
+SaveData gameSave;
 
 #include <thread>     // 多线程
 #include <mutex>      // 线程安全（锁）
 #include <future>     // 异步加载
 #include <chrono>     // 时间
+
+// 保存提示全局变量（放cpp最顶部include下面）
+bool showSaveTip = false;
+float saveTipTime = 0.0f;
+
+void BreakoutGame::LoadLevelData(int lid)
+{
+    if(lid < 1 || lid > 3) return;
+    nowLevel = lid;
+
+    LevelCfg targetCfg{};
+    bool findOk = false;
+    for(auto &c : allLevels)
+    {
+        if(c.level_id == lid)
+        {
+            targetCfg = c;
+            findOk = true;
+            break;
+        }
+    }
+    if(!findOk) return;
+
+    // 赋值速度倍率
+    curBallSpeedRate = targetCfg.ball_speed;
+    curPaddleSpeedRate = targetCfg.paddle_speed;
+
+    // 清空旧砖块
+    for(auto &b : bricks) delete b;
+    bricks.clear();
+
+    const Color BRICK_COLORS[] = {RED, GREEN, BLUE, YELLOW, PURPLE};
+    int r = targetCfg.rows;
+    int c = targetCfg.cols;
+
+    for(int y = 0; y < r; y++)
+    {
+        for(int x = 0; x < c; x++)
+        {
+            if(targetCfg.layout[y][x] == 1)
+            {
+                int idx = (x + y) % 5;
+                float bx = 65 + x * 70;
+                float by = 100 + y * 35;
+                bricks.push_back(new Brick(bx, by, 60, 25, BRICK_COLORS[idx]));
+            }
+        }
+    }
+
+    // 重置球位置
+    if(!balls.empty())
+    {
+        Rectangle rect = paddle1->GetRect();
+        balls[0]->SetPosition({rect.x + rect.width/2, rect.y - 20});
+        balls[0]->SetSpeed({0,0});
+    }
+    isBallPaused = true;
+}
+
+void saveLevel(const std::string& filename, const LevelData& level) {
+    json j;
+    j["rows"] = level.rows;
+    j["cols"] = level.cols;
+    j["layout"] = level.brickLayout;
+
+    std::ofstream file(filename);
+    if (file.is_open()) {
+        file << j.dump(4); // 4个空格缩进，方便阅读
+        file.close();
+    }
+}
+
+LevelData loadLevel(const std::string& filename) {
+    LevelData level;
+    
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        return level;
+    }
+
+    json j;
+    file >> j;
+    file.close();
+
+    level.rows = j["rows"];
+    level.cols = j["cols"];
+    level.brickLayout = j["layout"].get<std::vector<std::vector<int>>>();
+
+    return level;
+}
 
 // ====================== 第10课 性能优化：粒子对象池 ======================
 const int MAX_PARTICLES = 500;  // 池大小
@@ -100,7 +207,7 @@ void LoadResourcesAsync()
 // 碰撞检测实现
 void BreakoutGame::HandleCollisions() {
     // ====================== 【优化课：开始计时】 ======================
-    double startTime = GetTime();
+    //double startTime = GetTime();
 
     // 球-墙壁碰撞
     for (auto& ball : balls) {
@@ -207,8 +314,8 @@ for (int j = 0; j < 10; j++) {
     }
 
     // ====================== 【优化课：结束计时 + 输出】 ======================
-    double elapsed = GetTime() - startTime;
-    TraceLog(LOG_INFO, "【碰撞检测耗时】：%.3f ms", elapsed * 1000);
+    //double elapsed = GetTime() - startTime;
+    //TraceLog(LOG_INFO, "【碰撞检测耗时】：%.3f ms", elapsed * 1000);
 }
 
 // 发送游戏状态给客户端
@@ -257,8 +364,58 @@ void BreakoutGame::ReceiveClientInput() {
 
 // 构造函数
 BreakoutGame::BreakoutGame() 
-    : score(0), life(5), gameState(GameStateEnum::START), isBallPaused(true), enetHost(nullptr), clientPeer(nullptr) {
-    // 初始化窗口
+    : score(0), life(5), gameState(GameStateEnum::START), isBallPaused(true), enetHost(nullptr), clientPeer(nullptr),nowLevel(1), curBallSpeedRate(1.0f), curPaddleSpeedRate(1.0f)
+     {
+    // 启动时自动读档
+SetTraceLogLevel(LOG_NONE);
+// 读取外部关卡配置文件 level.json
+std::ifstream levelFile("level.json");
+if(levelFile.is_open())
+{
+    json levJson;
+    levelFile >> levJson;
+    levelFile.close();
+    allLevels.clear();
+    for(auto &item : levJson["levels"])
+    {
+        LevelCfg cfg;
+        cfg.level_id = item["level_id"];
+        cfg.rows = item["rows"];
+        cfg.cols = item["cols"];
+        cfg.ball_speed = item["ball_speed"];
+        cfg.paddle_speed = item["paddle_speed"];
+        cfg.layout = item["layout"].get<std::vector<std::vector<int>>>();
+        allLevels.push_back(cfg);
+    }
+}
+    // 开机检测是否有存档文件
+// 开机检测是否有存档文件
+std::ifstream checkFile("save.json");
+if(checkFile.is_open())
+{
+    hasSaveFile = true;
+    json j;
+    checkFile >> j;
+    checkFile.close();
+    
+    gameSave.score = j["score"];
+    gameSave.life = j["life"];
+    gameSave.level.rows = j["level"]["rows"];
+    gameSave.level.cols = j["level"]["cols"];
+    gameSave.level.brickLayout = j["level"]["layout"].get<std::vector<std::vector<int>>>();
+    gameSave.ballPos = {j["ballPos"][0], j["ballPos"][1]};
+    gameSave.ballSpeed = {j["ballSpeed"][0], j["ballSpeed"][1]};
+    
+    // 进入读档菜单
+    gameState = GameStateEnum::LOAD_MENU;
+}
+else
+{
+    hasSaveFile = false;
+    gameState = GameStateEnum::START;
+}
+    
+        // 初始化窗口
     InitWindow(800, 600, "双人打砖块 ");
     SetTargetFPS(60);
     srand(time(NULL));
@@ -367,6 +524,59 @@ if (showLoadComplete)
 }
 }
 
+// ========== 必须放这里：存档选择界面 ==========
+    if (gameState == GameStateEnum::LOAD_MENU)
+    {
+        // 按1继续上次游戏
+       // 按1继续上次游戏
+if(IsKeyPressed(KEY_ONE))
+{
+    // 1. 恢复分数和生命
+    score = gameSave.score;
+    life = gameSave.life;
+
+    // 2. 加载砖块布局
+    for (auto& b : bricks) delete b;
+    bricks.clear();
+    const Color BRICK_COLORS[] = {RED, GREEN, BLUE, YELLOW, PURPLE};
+    const int BRICK_COLOR_COUNT = sizeof(BRICK_COLORS)/sizeof(Color);
+    for (int y = 0; y < 4; y++) {
+        for (int x = 0; x < 10; x++) {
+            int colorIndex = (x + y) % BRICK_COLOR_COUNT;
+            float brickX = 65 + x * 70;
+            float brickY = 100 + y * 35;
+            Brick* brick = new Brick(brickX, brickY, 60, 25, BRICK_COLORS[colorIndex]);
+            if (!gameSave.level.brickLayout[y][x]) {
+                brick->Destroy(); // 恢复砖块是否被打碎的状态
+            }
+            bricks.push_back(brick);
+        }
+    }
+
+    // 3. 恢复球的位置和速度
+    if (!balls.empty()) {
+        balls[0]->SetPosition(gameSave.ballPos);
+        balls[0]->SetSpeed(gameSave.ballSpeed);
+    }
+
+    // 4. 进入游戏状态
+    gameState = GameStateEnum::PLAYING;
+    isBallPaused = true;
+}
+        // 按2全新开局
+        if(IsKeyPressed(KEY_TWO))
+        {
+            score = 0;
+            life = 5;
+            gameState = GameStateEnum::START;
+            isBallPaused = true;
+        }
+        ReceiveClientInput();
+        return;
+    }
+
+
+
     // 起始界面
     if (gameState == GameStateEnum::START) {
         paddle1->Update();
@@ -396,6 +606,75 @@ if (showLoadComplete)
 
     // 游戏运行中
     ReceiveClientInput();
+
+    // S保存 K加载
+// 【S键】保存完整游戏状态
+if (IsKeyPressed(KEY_S) && gameState == GameStateEnum::PLAYING)
+{
+    // 1. 保存关卡布局
+    LevelData data;
+    data.rows = 4;
+    data.cols = 10;
+    data.brickLayout.resize(4, std::vector<int>(10, 1));
+    for (int y = 0; y < 4; y++) {
+        for (int x = 0; x < 10; x++) {
+            data.brickLayout[y][x] = !bricks[y*10 + x]->IsDestroyed();
+        }
+    }
+
+    // 2. 保存完整游戏数据
+    gameSave.score = score;
+    gameSave.life = life;
+    gameSave.level = data;
+    gameSave.ballPos = balls[0]->GetPosition();
+    gameSave.ballSpeed = balls[0]->GetSpeed();
+
+    // 3. 写入文件
+    json j;
+    j["score"] = gameSave.score;
+    j["life"] = gameSave.life;
+    j["level"]["rows"] = gameSave.level.rows;
+    j["level"]["cols"] = gameSave.level.cols;
+    j["level"]["layout"] = gameSave.level.brickLayout;
+    j["ballPos"] = {gameSave.ballPos.x, gameSave.ballPos.y};
+    j["ballSpeed"] = {gameSave.ballSpeed.x, gameSave.ballSpeed.y};
+
+    std::ofstream saveFile("save.json");
+    if (saveFile.is_open()) {
+        saveFile << j.dump(4);
+        saveFile.close();
+    }
+
+    // 4. 暂停游戏并显示提示
+    isBallPaused = true;
+    showSaveTip = true;
+    saveTipTime = 1.5f;
+}
+
+if (showSaveTip)
+{
+    saveTipTime -= GetFrameTime();
+    if (saveTipTime <= 0)
+        showSaveTip = false;
+}
+
+if (IsKeyPressed(KEY_K)) 
+{
+    LevelData loaded = loadLevel("level.json");
+    for (auto& b : bricks) delete b;
+    bricks.clear();
+    
+    const Color BRICK_COLORS[] = {RED, GREEN, BLUE, YELLOW, PURPLE};
+    const int BRICK_COLOR_COUNT = sizeof(BRICK_COLORS)/sizeof(Color);
+    for (int y = 0; y < 4; y++) {
+        for (int x = 0; x < 10; x++) {
+            int colorIndex = (x + y) % BRICK_COLOR_COUNT;
+            float brickX = 65 + x * 70;
+            float brickY = 100 + y * 35;
+            bricks.push_back(new Brick(brickX, brickY, 60, 25, BRICK_COLORS[colorIndex]));
+        }
+    }
+}
     paddle1->Update();
 
     // 上方板键盘控制（灵敏 + 全屏移动）
@@ -417,23 +696,33 @@ if (showLoadComplete)
         Rectangle paddleRect = paddle1->GetRect();
         balls[0]->SetPosition({paddleRect.x + paddleRect.width/2, paddleRect.y - 20});
         balls[0]->SetSpeed({0, 0});
-        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-            balls[0]->SetSpeed({0, -250});
-            isBallPaused = false;
-        }
+        // 5. 发球逻辑绑定球速倍率（按关卡变快）
+    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) 
+    {
+        float baseSpeed = 250.0f;
+        // 球速 = 基础速度 × 当前关卡倍率
+        balls[0]->SetSpeed({0, -baseSpeed * curBallSpeedRate});
+        isBallPaused = false;
+    }
     } else {
         for (auto& ball : balls) ball->Update();
     }
 
-    HandleCollisions();
-for (auto& pu : powerUps) pu.Update();
-// 【对象池】更新粒子
-UpdateParticlePool();
+        HandleCollisions();
+    for (auto& pu : powerUps) pu.Update();
+    UpdateParticlePool();
+    if (std::all_of(bricks.begin(), bricks.end(), [](Brick* b) {
+        return b->IsDestroyed();
+    })) {
+        if (nowLevel < 3) {
+            LoadLevelData(nowLevel + 1);  // 自动进下一关
+        } else {
+            gameState = GameStateEnum::WIN; // 3关通关
+        }
+    }
 
-    // 同步状态给客户端（可选）
     SendGameState();
 }
-
 // 绘制游戏
 void BreakoutGame::DrawGame() {
     BeginDrawing();
@@ -447,7 +736,7 @@ void BreakoutGame::DrawGame() {
         DrawText("LOADING...", 320, 270, 40, YELLOW);
     }
 }
-
+DrawText(TextFormat("LEVEL : %d", nowLevel), 20, 260, 26, SKYBLUE);
 // 加载完成提示
 if (showLoadComplete)
 {
@@ -479,6 +768,25 @@ if (showLoadComplete)
 
     if (clientPeer) DrawText("client has connected", 600, 570, 20, GREEN);
      else DrawText("waiting for client...", 600, 570, 20, RED);
+     // 绘制保存成功文字
+if(showSaveTip)
+{
+    DrawText("SAVE SUCCESS !", 260, 260, 35, GREEN);
+}
+
+// 存档选择菜单（英文）
+if(gameState == GameStateEnum::LOAD_MENU)
+{
+    DrawText("SAVE FILE DETECTED", 220, 200, 40, YELLOW);
+    DrawText("PRESS 1 -> CONTINUE GAME", 230, 280, 30, WHITE);
+    DrawText("PRESS 2 -> NEW GAME", 270, 330, 30, WHITE);
+}
+
+// // 保存成功提示（英文）
+// if(showSaveTip)
+// {
+//     DrawText("GAME SAVED!", 280, 260, 35, GREEN);
+// }
 
      // 性能数据（屏幕正上方居中）
 DrawText(TextFormat("FPS: %d | Frame time: %.2f ms", GetFPS(), GetFrameTime() * 1000), 280, 10, 20, YELLOW);
