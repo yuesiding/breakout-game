@@ -1,0 +1,14 @@
+# 编译生成的目录，永远不要提交
+build/
+cmake-build-*/
+*.o
+*.a
+*.so
+*.exe
+
+# VS Code 配置文件
+.vscode/
+.idea/
+
+# 存档文件（可选）
+save.json
