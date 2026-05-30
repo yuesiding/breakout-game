@@ -14,9 +14,12 @@
 ### 编译命令
 ```bash
 g++ main.cpp breakoutgame.cpp -o breakout -lraylib -lGL -lm -lpthread -ldl -lrt -lX11 -lenet
+``` 
 
 ### 运行命令
+``` bash
 ./breakout
+```
 
 ### 操作命令
 -移动下方挡板->鼠标
